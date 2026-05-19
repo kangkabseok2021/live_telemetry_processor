@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── C++ backend — no Qt required ──────────────────────────────────────────
+  cpp-build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_DEFAULT_CMP0135=NEW \
+            -DBUILD_TESTING=ON
+
+      - name: Build backend + tests
+        run: cmake --build build -j4 --target backend_lib test_backend
+
+      - name: Run backend tests (15 tests)
+        run: ctest --test-dir build --output-on-failure -V
+
+  # ── Python HIL simulator tests ────────────────────────────────────────────
+  python-hil-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen
+      - run: uv run pytest hil/test_hil_sim.py -v --tb=short
+
+  # ── ARM64 cross-compile (backend only) ───────────────────────────────────
+  arm64-cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM64 cross-compiler
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Cross-compile backend_lib
+        run: |
+          cmake -B build-arm64 -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_DEFAULT_CMP0135=NEW \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DBUILD_TESTING=OFF
+          cmake --build build-arm64 --target backend_lib -j4
+
+  # ── Docker build smoke test ───────────────────────────────────────────────
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image (builder stage)
+        run: docker build --target builder -t telemetry-node:ci .

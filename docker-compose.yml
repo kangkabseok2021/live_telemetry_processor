@@ -1,0 +1,15 @@
+services:
+
+  telemetry-backend:
+    build: .
+    ports: ["57300:57300/udp"]
+    restart: unless-stopped
+    command: ["57300"]
+
+  hil-sim:
+    build:
+      context: .
+      dockerfile: Dockerfile.hil
+    depends_on: [telemetry-backend]
+    command: ["--host", "telemetry-backend", "--port", "57300",
+              "--rate", "100", "--duration", "300"]

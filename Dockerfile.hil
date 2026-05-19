@@ -1,0 +1,6 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY hil/ hil/
+COPY pyproject.toml .
+RUN pip install --no-cache-dir uv && uv sync --frozen 2>/dev/null || pip install .
+ENTRYPOINT ["python", "-m", "hil.hil_sim"]
