@@ -68,3 +68,6 @@ if(BUILD_TESTING)
 
     add_test(NAME backend_tests COMMAND test_backend)
 endif()
+
+# Medical Imaging State Machine (C++23 subfolder)
+add_subdirectory(medical_imaging)

@@ -4,6 +4,14 @@ A ground-station software stack for processing high-frequency aerospace telemetr
 
 ---
 
+## Subprojects
+
+| Project | Description | Docs |
+|---|---|---|
+| **Medical Imaging State Machine** | C++23 `std::variant` FSM (Idle→Calibrating→Acquiring→Processing→Fault), SCHED_FIFO RT thread, extern-C shim + C# P/Invoke | [medical_imaging/docs/ARCHITECTURE.md](medical_imaging/docs/ARCHITECTURE.md) |
+
+---
+
 ## Architecture
 
 ```

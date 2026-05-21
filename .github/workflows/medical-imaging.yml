@@ -1,0 +1,49 @@
+name: Medical Imaging CI
+
+on:
+  push:
+    branches: [main]
+    paths: [medical_imaging/**]
+  pull_request:
+    branches: [main]
+    paths: [medical_imaging/**]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC 12
+        run: sudo apt-get install -y gcc-12 g++-12
+
+      - name: Build and test
+        env:
+          CC: gcc-12
+          CXX: g++-12
+        run: |
+          cmake -B medical_imaging/build -S medical_imaging \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_CXX_COMPILER=g++-12
+          cmake --build medical_imaging/build -j4
+          ctest --test-dir medical_imaging/build --output-on-failure
+
+  asan:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC 12
+        run: sudo apt-get install -y gcc-12 g++-12
+
+      - name: ASan build
+        run: |
+          cmake -B medical_imaging/build-asan -S medical_imaging \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_CXX_COMPILER=g++-12 \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build medical_imaging/build-asan -j4
+          ctest --test-dir medical_imaging/build-asan --output-on-failure
