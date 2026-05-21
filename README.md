@@ -1,14 +1,17 @@
-# Deterministic Live Telemetry Processor & Mission Visualization Pipeline
+# Deterministic Live Telemetry Processor & Medical Imaging State Machine
 
-A ground-station software stack for processing high-frequency aerospace telemetry in real time. A **C++20 backend** receives binary GNC state vectors over UDP at 1000+ Hz and feeds them through a **lock-free SPSC pipeline** into a **zero-copy binary parser**. A **GNC numerical validation layer** applies moving-window deviation filters and detects sequence gaps. A **coordinate transformation engine** converts ECEF positions to local NED. A **Qt 6 operator UI** renders a live 2D trajectory at 60 Hz via a throttled render pipeline that never blocks the hot ingestion path. A **Python HIL simulator** replays captured flight logs for end-to-end mission rehearsal.
-
----
-
-## Subprojects
+Two real-time C++ projects sharing a common embedded-Linux / Qt design pattern and CI infrastructure.
 
 | Project | Description | Docs |
 |---|---|---|
-| **Medical Imaging State Machine** | C++23 `std::variant` FSM (Idle→Calibrating→Acquiring→Processing→Fault), SCHED_FIFO RT thread, extern-C shim + C# P/Invoke | [medical_imaging/docs/ARCHITECTURE.md](medical_imaging/docs/ARCHITECTURE.md) |
+| **Live Telemetry Processor** | C++20 SPSC pipeline + Qt 6 UI — processes aerospace GNC telemetry at 1000+ Hz over UDP | [Architecture ↓](#architecture) |
+| **Medical Imaging State Machine** | C++23 `std::variant` FSM + SCHED_FIFO RT thread + extern-C / C# P/Invoke shim — 500 µs deadline budget | [medical_imaging/docs/ARCHITECTURE.md](medical_imaging/docs/ARCHITECTURE.md) |
+
+---
+
+# Live Telemetry Processor & Mission Visualization Pipeline
+
+A ground-station software stack for processing high-frequency aerospace telemetry in real time. A **C++20 backend** receives binary GNC state vectors over UDP at 1000+ Hz and feeds them through a **lock-free SPSC pipeline** into a **zero-copy binary parser**. A **GNC numerical validation layer** applies moving-window deviation filters and detects sequence gaps. A **coordinate transformation engine** converts ECEF positions to local NED. A **Qt 6 operator UI** renders a live 2D trajectory at 60 Hz via a throttled render pipeline that never blocks the hot ingestion path. A **Python HIL simulator** replays captured flight logs for end-to-end mission rehearsal.
 
 ---
 
@@ -145,63 +148,94 @@ live_telemetry_processor/
 ├── hil/
 │   ├── hil_sim.py                Python UDP flight-log replayer + fault injection
 │   └── test_hil_sim.py           5 pytest tests for packet format correctness
+├── medical_imaging/              ── Medical Imaging State Machine ──────────────
+│   ├── include/
+│   │   ├── RtConfig.h            DEADLINE_US=500, LOG_CAPACITY=1024
+│   │   ├── StateMachine.h        std::variant states/events + std::expected API
+│   │   ├── TransitionLog.h       alignas(64) lock-free ring buffer (1024 entries)
+│   │   ├── ImagePipeline.h       Sensor pipeline stub interface
+│   │   ├── RtEngine.h            100 Hz jthread engine
+│   │   └── c_api.h               extern-C opaque pointer API
+│   ├── src/
+│   │   ├── StateMachine.cpp      std::visit transition table + timing + deadline
+│   │   ├── TransitionLog.cpp     Atomic ring-buffer push/get + g_log definition
+│   │   ├── ImagePipeline.cpp     Stub implementations
+│   │   ├── RtEngine.cpp          timerfd (Linux) / sleep_for (macOS) tick loop
+│   │   ├── c_api.cpp             smachine_tag + 5 C shim functions
+│   │   └── main.cpp              Demo: start engine, CmdStart, 3 s, print state
+│   ├── tests/
+│   │   └── test_state_machine.cpp  14 GoogleTests (TDD — written before impl)
+│   ├── csharp/
+│   │   └── ImagingEngineClient.cs  C# P/Invoke wrapper with SafeHandle + XML docs
+│   ├── scripts/
+│   │   └── generate_timing_report.py  NumPy P50/P95/P99 Markdown table
+│   ├── docs/
+│   │   ├── ARCHITECTURE.md       Mermaid state + class diagrams
+│   │   ├── RT-CONSTRAINTS.md     Timing budget, SCHED_FIFO, mlockall
+│   │   └── adr/ADR-001-rt-vs-rest-boundary.md
+│   └── CMakeLists.txt            C++23, imaging_core + imaging_engine.so + tests
 ├── CMakeLists.txt
-├── Dockerfile                    gcc:14 builder → debian:bookworm-slim runtime
-├── Dockerfile.hil                Python HIL simulator container
+├── Dockerfile
+├── Dockerfile.hil
 ├── docker-compose.yml
 ├── pyproject.toml
-└── .github/workflows/ci.yml
+└── .github/workflows/
+    ├── ci.yml                    Telemetry processor CI
+    └── medical-imaging.yml       Medical imaging CI (paths: medical_imaging/**)
 ```
 
 ---
 
 ## Quick Start
 
-### Build and test (Linux/macOS, requires cmake + g++14+)
+### Live Telemetry Processor
 
 ```bash
+# Build backend + tests (Linux/macOS, requires cmake + g++14+)
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build -j4 --target backend_lib test_backend
 ctest --test-dir build --output-on-failure -V
-```
 
-### Run the headless backend
-
-```bash
+# Run headless backend
 cmake --build build --target telemetry_headless
-./build/telemetry_headless 57300   # listens on UDP :57300
-```
+./build/telemetry_headless 57300          # listens on UDP :57300
 
-### Run the Qt 6 UI (requires Qt6 Widgets)
-
-```bash
-# Qt6 is found automatically if installed
+# Run Qt 6 UI (requires Qt6 Widgets)
 cmake --build build --target telemetry_node
 ./build/telemetry_node --port 57300
-```
 
-### Stream test data with the HIL simulator
-
-```bash
+# Stream test data with the HIL simulator
 uv sync
 uv run python -m hil.hil_sim --rate 1000 --duration 30
-# Inject a sequence gap at t=10 s:
 uv run python -m hil.hil_sim --rate 100 --fault gap --fault-at 10.0
-# Inject an outlier spike at t=5 s:
 uv run python -m hil.hil_sim --rate 100 --fault outlier --fault-at 5.0
+
+# Full stack via Docker Compose
+docker compose up --build
 ```
 
-### Run with Docker Compose
+### Medical Imaging State Machine
 
 ```bash
-docker compose up --build
+# Build + run 14 GoogleTests (requires g++ 12+ with C++23)
+cmake -B medical_imaging/build -S medical_imaging \
+      -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+cmake --build medical_imaging/build -j4
+ctest --test-dir medical_imaging/build --output-on-failure
+
+# Build shared library for C# P/Invoke
+cmake --build medical_imaging/build --target imaging_engine
+# → medical_imaging/build/libimaging_engine.so
+
+# Run demo
+./medical_imaging/build/imaging_demo
 ```
 
 ---
 
 ## Tests
 
-### C++ — 15 GoogleTests (`backend_lib`, no Qt)
+### C++ — 15 GoogleTests — `backend_lib` (telemetry processor, no Qt)
 
 | Suite | Test | What it verifies |
 |---|---|---|
@@ -221,6 +255,25 @@ docker compose up --build
 | MetricStoreTest | UpdateAndSnapshotRoundTrip | snapshot() returns latest update |
 | MetricStoreTest | StateAtomicReadable | state() reflects set_state() immediately |
 
+### C++ — 14 GoogleTests — `imaging_core` (medical imaging, TDD)
+
+| Suite | Test | What it verifies |
+|---|---|---|
+| StateMachineTest | IdleToCalibrating_OnCmdStart | Valid: Idle + CmdStart → Calibrating |
+| StateMachineTest | CalibratingToAcquiring_OnCalibDone | Valid: Calibrating + EvtCalibDone → Acquiring |
+| StateMachineTest | AcquiringToProcessing_OnBatchReady | Valid: Acquiring + EvtBatchReady → Processing |
+| StateMachineTest | ProcessingToIdle_OnProcessDone | Valid: Processing + EvtProcessDone → Idle |
+| StateMachineTest | CalibratingToProcessing_DirectBlocked | Invalid → `INVALID_TRANSITION` |
+| StateMachineTest | AcquiringToIdle_DirectBlocked | Invalid → `INVALID_TRANSITION` |
+| StateMachineTest | FaultToCalibrating_DirectBlocked | Invalid → `INVALID_TRANSITION` |
+| StateMachineTest | AnyStateToFault_FromIdle | EvtError latches any state to Fault |
+| StateMachineTest | AnyStateToFault_FromCalibrating | EvtError from Calibrating → Fault |
+| StateMachineTest | AnyStateToFault_FromAcquiring | EvtError from Acquiring → Fault |
+| StateMachineTest | FaultToIdle_OnCmdReset | CmdReset unlocks latching Fault |
+| StateMachineTest | DeadlineNotExceeded_NormalTransition | T_exec < 500 µs (std::chrono) |
+| StateMachineTest | TransitionLog_PopulatedAfterTransition | Ring buffer entry written |
+| StateMachineTest | TransitionLog_RingWraps_At_1024 | Oldest entry overwritten after 1024 |
+
 ### Python — 5 pytest tests (`hil/test_hil_sim.py`)
 
 | Test | What it verifies |
@@ -235,6 +288,8 @@ docker compose up --build
 
 ## CI
 
+### Telemetry Processor (`.github/workflows/ci.yml`)
+
 | Job | Runner | What it does |
 |---|---|---|
 | `cpp-build-test` | ubuntu-latest | CMake build + 15 GoogleTests (no Qt) |
@@ -242,11 +297,18 @@ docker compose up --build
 | `arm64-cross-build` | ubuntu-latest | Cross-compile `backend_lib` for aarch64 |
 | `docker-build` | ubuntu-latest | `docker build --target builder` smoke test |
 
+### Medical Imaging State Machine (`.github/workflows/medical-imaging.yml`) — triggers on `medical_imaging/**`
+
+| Job | Runner | What it does |
+|---|---|---|
+| `build-test` | ubuntu-22.04 | CMake C++23 build + 14 GoogleTests (g++-12) |
+| `asan` | ubuntu-22.04 | ASan + UBSan build, same 14 tests — zero errors required |
+
 ---
 
 ## HIL Simulator
 
-`hil/hil_sim.py` generates synthetic `TelemetryFrame` packets matching the C++ struct layout (verified by `test_frame_size`) and transmits them over UDP.
+`hil/hil_sim.py` generates synthetic `TelemetryFrame` packets matching the C++ struct layout and transmits them over UDP.
 
 **Fault injection modes:**
 
@@ -258,6 +320,8 @@ docker compose up --build
 ---
 
 ## Tech Stack
+
+### Live Telemetry Processor
 
 | Layer | Technology |
 |---|---|
@@ -271,4 +335,18 @@ docker compose up --build
 | HIL simulator | Python 3.12, asyncio-timed UDP, struct.pack |
 | Container | Docker multi-stage (gcc:14 → debian:bookworm-slim) |
 | CI | GitHub Actions: build+test, Python HIL, ARM64 cross-compile, Docker |
-| Targets | x86\_64 (CI/dev), ARM64 (Raspberry Pi 4 / edge ground station) |
+| Targets | x86_64 (CI/dev), ARM64 (Raspberry Pi 4 / edge ground station) |
+
+### Medical Imaging State Machine
+
+| Layer | Technology |
+|---|---|
+| Language | C++23 — std::variant, std::expected, std::jthread, std::atomic |
+| State machine | std::visit overload set — zero vtable, zero indirect calls |
+| RT scheduling | SCHED_FIFO + mlockall (Linux); sleep_for fallback (macOS) |
+| Timing | std::chrono high_resolution_clock, 500 µs deadline budget |
+| Ring buffer | alignas(64) std::array<TransitionEntry, 1024> — no heap |
+| C interop | extern-C opaque pointer shim → libimaging_engine.so |
+| C# layer | P/Invoke SafeHandle wrapper + XML-documented API |
+| Tests | 14 GoogleTests (TDD — written before implementation) |
+| CI | GitHub Actions: g++-12 C++23 build+test + ASan job |
