@@ -17,6 +17,8 @@ add_library(imaging_core STATIC
 target_include_directories(imaging_core PUBLIC include)
 target_link_libraries(imaging_core PUBLIC Threads::Threads)
 target_compile_options(imaging_core PRIVATE -Wall -Wextra -Wpedantic)
+# Required so imaging_core.a can be linked into imaging_engine.so
+set_target_properties(imaging_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ── shared library for C# P/Invoke ───────────────────────────────────────
 add_library(imaging_engine SHARED src/c_api.cpp)
